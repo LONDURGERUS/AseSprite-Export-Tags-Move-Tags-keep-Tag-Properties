@@ -17,9 +17,9 @@ end
 local selectedIndex = 1
 
 function showDialog()
-    local dlg = Dialog("Full Property Stitcher")
+    local dlg = Dialog("Clean Assembly")
 
-    dlg:label{ text="Reorder tags (Layers, Cels, and Blend Modes preserved):" }
+    dlg:label{ text="Reorder tags (Empty frames/layers fixed):" }
     dlg:separator()
 
     for i, tagData in ipairs(tagList) do
@@ -70,47 +70,76 @@ end
 
 function assembleSprite()
     local newSprite = Sprite(sprite.width, sprite.height, sprite.colorMode)
-    newSprite.filename = "Full_Property_Copy_" .. sprite.filename
+    newSprite.filename = "Clean_Stitched_" .. sprite.filename
     
-    -- PHASE 1: Copy Layer Properties
     local layerMap = {}
-    for _, layer in ipairs(sprite.layers) do
-        local nl = newSprite:newLayer()
-        nl.name = layer.name
-        nl.color = layer.color
-        nl.opacity = layer.opacity
-        nl.blendMode = layer.blendMode
-        nl.isVisible = layer.isVisible
-        layerMap[layer.name] = nl
+
+    -- PHASE 1: Recursive Layer Copy
+    local function copyLayers(sourceLayers, targetContainer)
+        for i = 1, #sourceLayers do
+            local layer = sourceLayers[i]
+            local nl
+            if layer.isGroup then
+                nl = newSprite:newGroup()
+                nl.parent = targetContainer
+                copyLayers(layer.layers, nl) 
+            else
+                nl = newSprite:newLayer()
+                nl.parent = targetContainer
+            end
+            
+            nl.name = layer.name
+            nl.color = layer.color
+            nl.opacity = layer.opacity
+            nl.blendMode = layer.blendMode
+            nl.isVisible = layer.isVisible
+            nl.isEditable = layer.isEditable
+            
+            layerMap[layer] = nl
+        end
     end
 
-    local finalTagPositions = {}
+    copyLayers(sprite.layers, newSprite)
 
-    -- PHASE 2: Stitch frames and Copy Cel Properties
+    -- CLEANUP DEFAULT LAYER 1: 
+    -- We do this BEFORE stitching frames to avoid confusion
+    local defaultLayer = newSprite.layers[1]
+    if defaultLayer.name == "Layer 1" then
+        newSprite:deleteLayer(defaultLayer)
+    end
+
+    -- PHASE 2: Assembly
+    local finalTagPositions = {}
+    local isFirstFrameAdded = false
+
     for _, tagData in ipairs(tagList) do
         if tagData.checked then
-            local startFrame = #newSprite.frames + 1
-            if #newSprite.frames == 1 and not newSprite.layers[1]:cel(1) then
-                startFrame = 1
-            end
+            local startFrameCount = #newSprite.frames
+            local tagStartFrame
 
             for i = tagData.from, tagData.to do
-                local currentFrame = (i == tagData.from and startFrame == 1) 
-                                     and newSprite.frames[1] or newSprite:newEmptyFrame()
+                local currentFrame
                 
+                -- Handle the very first frame of the sprite
+                if not isFirstFrameAdded then
+                    currentFrame = newSprite.frames[1]
+                    isFirstFrameAdded = true
+                else
+                    currentFrame = newSprite:newEmptyFrame()
+                end
+                
+                if not tagStartFrame then tagStartFrame = currentFrame.frameNumber end
                 currentFrame.duration = sprite.frames[i].duration
                 
-                for _, layer in ipairs(sprite.layers) do
-                    local sourceCel = layer:cel(i)
-                    if sourceCel then
-                        local targetLayer = layerMap[layer.name]
-                        -- Create the new Cel
-                        local newCel = newSprite:newCel(targetLayer, currentFrame, sourceCel.image, sourceCel.position)
-                        
-                        -- COPY CEL PROPERTIES HERE
-                        newCel.opacity = sourceCel.opacity -- Individual cel transparency
-                        newCel.color = sourceCel.color     -- Individual cel color label
-                        newCel.zIndex = sourceCel.zIndex   -- Order within the frame
+                for oldLayer, newLayer in pairs(layerMap) do
+                    if not oldLayer.isGroup then
+                        local sourceCel = oldLayer:cel(i)
+                        if sourceCel then
+                            local newCel = newSprite:newCel(newLayer, currentFrame, sourceCel.image, sourceCel.position)
+                            newCel.opacity = sourceCel.opacity
+                            newCel.color = sourceCel.color
+                            newCel.zIndex = sourceCel.zIndex
+                        end
                     end
                 end
             end
@@ -118,7 +147,7 @@ function assembleSprite()
             table.insert(finalTagPositions, {
                 name = tagData.name,
                 color = tagData.color,
-                start = startFrame,
+                start = tagStartFrame,
                 stop = #newSprite.frames
             })
         end
@@ -131,15 +160,7 @@ function assembleSprite()
         nTag.color = pos.color
     end
 
-    -- Final Cleanup
-    for _, nl in ipairs(newSprite.layers) do
-        if nl.name == "Layer 1" and not nl:cel(1) then
-            newSprite:deleteLayer(nl)
-            break
-        end
-    end
-
-    app.alert("Success! Layers, Cels, and Tags are all 100% preserved.")
+    app.alert("New Export Tab Created With Group,Tags,colors!")
 end
 
 showDialog()
